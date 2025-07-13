@@ -1,4 +1,4 @@
-// winstate.c
+// winwery.c
 // Applies winstate.json to configure a Windows system
 
 #include <windows.h>
@@ -12,7 +12,7 @@
 
 #pragma comment(lib, "srclient.lib") // If using MSVC; for mingw you may need to link srclient or use dynamic load
 
-#define CONFIG_PATH "C:/winstate.json"
+#define CONFIG_PATH "C:/WinState/winstate.json"
 #define WINSTATE_VERSION "1.0.0"
 #define BUILD_DATE __DATE__ " " __TIME__
 
@@ -28,17 +28,17 @@ void create_restore_point(const char* desc) {
     strncpy(rpInfo.szDescription, desc, sizeof(rpInfo.szDescription) - 1);
 
     if (!SRSetRestorePoint(&rpInfo, &smStatus)) {
-        printf("❌ Failed to create restore point: error %ld\n", GetLastError());
+        printf("Failed to create restore point: error %ld\n", GetLastError());
         return;
     }
 
     rpInfo.dwEventType = END_SYSTEM_CHANGE;
     if (!SRSetRestorePoint(&rpInfo, &smStatus)) {
-        printf("❌ Failed to end restore point\n");
+        printf(" Failed to end restore point\n");
         return;
     }
 
-    printf("✔ System Restore Point created: %s\n", desc);
+    printf("System Restore Point created: %s\n", desc);
 }
 
 void reboot_system() {
@@ -49,7 +49,7 @@ void reboot_system() {
     if (!OpenProcessToken(GetCurrentProcess(),
                           TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
                           &hToken)) {
-        printf("❌ Could not open process token\n");
+        printf(" Could not open process token\n");
         return;
     }
 
@@ -59,7 +59,7 @@ void reboot_system() {
 
     AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, 0);
     if (GetLastError() != ERROR_SUCCESS) {
-        printf("❌ Could not adjust token privileges\n");
+        printf(" Could not adjust token privileges\n");
         CloseHandle(hToken);
         return;
     }
@@ -70,7 +70,7 @@ void reboot_system() {
     if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                       SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_UPGRADE |
                       SHTDN_REASON_FLAG_PLANNED)) {
-        printf("❌ Failed to reboot system\n");
+        printf(" Failed to reboot system\n");
     } else {
         printf("♻️ System reboot initiated\n");
     }
@@ -102,7 +102,7 @@ void apply_wallpaper(cJSON* config) {
     cJSON* wall = cJSON_GetObjectItem(config, "wallpaper");
     if (wall && wall->valuestring && strlen(wall->valuestring) > 0) {
         SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)wall->valuestring, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-        printf("🖼 Wallpaper set to: %s\n", wall->valuestring);
+        printf(" Wallpaper set to: %s\n", wall->valuestring);
     }
 }
 
@@ -203,13 +203,13 @@ int create_default_config() {
     FILE* f = fopen(CONFIG_PATH, "r");
     if (f) {
         fclose(f);
-        printf("✔ %s already exists\n", CONFIG_PATH);
+        printf("%s already exists\n", CONFIG_PATH);
         return 0;
     }
 
     f = fopen(CONFIG_PATH, "w");
     if (!f) {
-        printf("❌ Failed to create %s\n", CONFIG_PATH);
+        printf(" Failed to create %s\n", CONFIG_PATH);
         return 1;
     }
 
@@ -231,7 +231,7 @@ int create_default_config() {
     fputs(default_json, f);
     fclose(f);
 
-    printf("✅ Created default %s\n", CONFIG_PATH);
+    printf(" Created default %s\n", CONFIG_PATH);
     return 0;
 }
 
@@ -279,7 +279,7 @@ void apply_wallpaper(cJSON* config) {
     cJSON* wall = cJSON_GetObjectItem(config, "wallpaper");
     if (wall && wall->valuestring && strlen(wall->valuestring) > 0) {
         SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)wall->valuestring, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-        printf("🖼 Wallpaper set to: %s\n", wall->valuestring);
+        printf(" Wallpaper set to: %s\n", wall->valuestring);
     }
 }
 }
@@ -410,7 +410,7 @@ void add_registry_prompt(cJSON* config) {
         cJSON_AddStringToObject(obj, "value", value);
 
         cJSON_AddItemToArray(registry, obj);
-        printf("✔ Added registry entry: %s\\%s\n", path, name);
+        printf("Added registry entry: %s\\%s\n", path, name);
 
         printf("Add another? (y/n): ");
         if (!fgets(yn, sizeof(yn), stdin)) break;
