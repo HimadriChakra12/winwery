@@ -9,14 +9,16 @@
 #include <direct.h>
 #include "cJSON.h"
 #include <srrestoreptapi.h>  // Add this include (needs linking with srclient.lib or use LoadLibrary + GetProcAddress)
+#include <shlobj.h>  // for SHGetFolderPath
 
 #pragma comment(lib, "srclient.lib") // If using MSVC; for mingw you may need to link srclient or use dynamic load
 
-#define CONFIG_PATH "C:/WinState/winstate.json"
 #define WINSTATE_VERSION "1.0.0"
 #define BUILD_DATE __DATE__ " " __TIME__
 
-#include <srrestoreptapi.h>
+char config_path[MAX_PATH];
+SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, config_path);
+strcat(config_path, "\\winstate.json");
 
 void create_restore_point(const char* desc) {
     RESTOREPOINTINFO rpInfo = {0};
@@ -200,16 +202,16 @@ void install_package_list(cJSON* list, const char* tool) {
 
 // Creates default winstate.json if missing
 int create_default_config() {
-    FILE* f = fopen(CONFIG_PATH, "r");
+    FILE* f = fopen(config_path, "r");
     if (f) {
         fclose(f);
-        printf("%s already exists\n", CONFIG_PATH);
+        printf("%s already exists\n", config_path);
         return 0;
     }
 
-    f = fopen(CONFIG_PATH, "w");
+    f = fopen(config_path, "w");
     if (!f) {
-        printf(" Failed to create %s\n", CONFIG_PATH);
+        printf(" Failed to create %s\n", config_path);
         return 1;
     }
 
@@ -231,14 +233,14 @@ int create_default_config() {
     fputs(default_json, f);
     fclose(f);
 
-    printf(" Created default %s\n", CONFIG_PATH);
+    printf(" Created default %s\n", config_path);
     return 0;
 }
 
 int apply_config() {
-    FILE* f = fopen(CONFIG_PATH, "r");
+    FILE* f = fopen(config_path, "r");
     if (!f) {
-        printf("Could not open %s\n", CONFIG_PATH);
+        printf("Could not open %s\n", config_path);
         return 1;
     }
 
@@ -300,7 +302,7 @@ char* read_file(const char* path) {
 // Utility: save cJSON to file
 int save_config(cJSON* config) {
     char* str = cJSON_Print(config);
-    FILE* f = fopen(CONFIG_PATH, "w");
+    FILE* f = fopen(config_path, "w");
     if (!f) {
         free(str);
         return 0;
@@ -430,16 +432,16 @@ int add_command(int argc, char* argv[]) {
         return 1;
     }
 
-    char* data = read_file(CONFIG_PATH);
+    char* data = read_file(config_path);
     if (!data) {
-        printf("Could not open %s, please run 'init' first.\n", CONFIG_PATH);
+        printf("Could not open %s, please run 'init' first.\n", config_path);
         return 1;
     }
 
     cJSON* config = cJSON_Parse(data);
     free(data);
     if (!config) {
-        printf("Invalid JSON in %s\n", CONFIG_PATH);
+        printf("Invalid JSON in %s\n", config_path);
         return 1;
     }
 
@@ -501,7 +503,7 @@ int add_command(int argc, char* argv[]) {
     }
 
     if (!save_config(config)) {
-        printf("Failed to save %s\n", CONFIG_PATH);
+        printf("Failed to save %s\n", config_path);
         cJSON_Delete(config);
         return 1;
     }
