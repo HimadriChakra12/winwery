@@ -8,17 +8,22 @@
 #include <shlobj.h>
 #include <direct.h>
 #include "cJSON.h"
-#include <srrestoreptapi.h>  // Add this include (needs linking with srclient.lib or use LoadLibrary + GetProcAddress)
-#include <shlobj.h>  // for SHGetFolderPath
+#include <srrestoreptapi.h>
+#include <shlobj.h>
 
-#pragma comment(lib, "srclient.lib") // If using MSVC; for mingw you may need to link srclient or use dynamic load
+#pragma comment(lib, "srclient.lib")
 
 #define WINSTATE_VERSION "1.0.0"
 #define BUILD_DATE __DATE__ " " __TIME__
 
+// Declare globally
 char config_path[MAX_PATH];
-SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, config_path);
-strcat(config_path, "\\winstate.json");
+
+// Must be called at start of main()
+void init_config_path() {
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, config_path);
+    strcat(config_path, "\\winstate.json");
+}
 
 void create_restore_point(const char* desc) {
     RESTOREPOINTINFO rpInfo = {0};
@@ -277,13 +282,6 @@ int apply_config() {
     create_restore_point("WinState v" WINSTATE_VERSION " applied");
     reboot_system();
     return 0;
-void apply_wallpaper(cJSON* config) {
-    cJSON* wall = cJSON_GetObjectItem(config, "wallpaper");
-    if (wall && wall->valuestring && strlen(wall->valuestring) > 0) {
-        SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)wall->valuestring, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-        printf(" Wallpaper set to: %s\n", wall->valuestring);
-    }
-}
 }
 // Utility: read entire file into string
 char* read_file(const char* path) {
@@ -514,6 +512,7 @@ int add_command(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    init_config_path();
     if (argc < 2) {
         printf("Usage: %s [init|apply|add]\n", argv[0]);
         return 1;
