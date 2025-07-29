@@ -31,8 +31,8 @@ void create_restore_point(const char* desc) {
     char command[512];
 
     snprintf(command, sizeof(command),
-        "powershell.exe -Command \"Checkpoint-Computer -Description '%s' -RestorePointType 'APPLICATION_INSTALL'\"",
-        desc);
+            "powershell.exe -Command \"Checkpoint-Computer -Description '%s' -RestorePointType 'APPLICATION_INSTALL'\"",
+            desc);
 
     int result = system(command);
 
@@ -47,10 +47,10 @@ void reboot_system() {
     // Enable the shutdown privilege
     HANDLE hToken;
     TOKEN_PRIVILEGES tkp;
-    
+
     if (!OpenProcessToken(GetCurrentProcess(),
-                          TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-                          &hToken)) {
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &hToken)) {
         printf(" Could not open process token\n");
         return;
     }
@@ -70,8 +70,8 @@ void reboot_system() {
 
     // Initiate system shutdown and reboot
     if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
-                      SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_UPGRADE |
-                      SHTDN_REASON_FLAG_PLANNED)) {
+                SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_UPGRADE |
+                SHTDN_REASON_FLAG_PLANNED)) {
         printf(" Failed to reboot system\n");
     } else {
         printf("♻️ System reboot initiated\n");
@@ -148,45 +148,18 @@ void apply_wallpaper(cJSON* config) {
 
     if (wall && wall->valuestring && strlen(wall->valuestring) > 0) {
         const char* path = wall->valuestring;
-        DWORD attr = GetFileAttributesA(path);
-        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            // Slideshow mode
-            char reg1[512], reg2[512], reg3[512], reg4[512];
 
-            snprintf(reg1, sizeof(reg1),
-                "reg add \"HKCU\\Control Panel\\Personalization\\Desktop Slideshow\" "
-                "/v Interval /t REG_DWORD /d %d /f", time_ms);
-
-            snprintf(reg2, sizeof(reg2),
-                "reg add \"HKCU\\Control Panel\\Personalization\\Desktop Slideshow\" "
-                "/v Shuffle /t REG_DWORD /d 1 /f");
-
-            snprintf(reg3, sizeof(reg3),
-                "reg add \"HKCU\\Control Panel\\Desktop\" /v Wallpaper /t REG_SZ /d \"\" /f");
-
-            snprintf(reg4, sizeof(reg4),
-                "reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers\" "
-                "/v SlideshowDirectory /t REG_SZ /d \"%s\" /f", path);
-
-            run_command(reg1);
-            run_command(reg2);
-            run_command(reg3);
-            run_command(reg4);
-
-            SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, "", SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-            printf("Wallpaper slideshow enabled from: %s (Interval: %d min)\n", path, time_min); 
-        } else {
-            // Single file
+        DWORD attrs = GetFileAttributesA(path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
             SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-            printf("Wallpaper set to: %s\n", path);
+            printf("🖼️  Wallpaper set to: %s\n", path);
         }
     }
-
     if (lock && lock->valuestring && strlen(lock->valuestring) > 0) {
         char reg_cmd[1024];
         snprintf(reg_cmd, sizeof(reg_cmd),
-            "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization\" "
-            "/v LockScreenImage /t REG_SZ /d \"%s\" /f", lock->valuestring);
+                "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization\" "
+                "/v LockScreenImage /t REG_SZ /d \"%s\" /f", lock->valuestring);
         run_command(reg_cmd);
         printf("Lock screen wallpaper set to: %s\n", lock->valuestring);
     }
