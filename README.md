@@ -1,1 +1,1 @@
-sysprep /generalize /oobe /shutdown /unattend:C:\Windows\System32\Sysprep\unattend.xml
+gcc winwery.c cJSON.c -o wry.exe -lole32 -lcomdlg32 -lshell32 -ladvapi32 -lshlwapi -lsrclient -luser32

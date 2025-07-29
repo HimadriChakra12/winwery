@@ -10,6 +10,8 @@
 #include "cJSON.h"
 #include <srrestoreptapi.h>
 #include <shlobj.h>
+#include <time.h>
+#include <io.h>
 
 #pragma comment(lib, "srclient.lib")
 
@@ -26,26 +28,19 @@ void init_config_path() {
 }
 
 void create_restore_point(const char* desc) {
-    RESTOREPOINTINFO rpInfo = {0};
-    STATEMGRSTATUS smStatus = {0};
+    char command[512];
 
-    rpInfo.dwEventType = BEGIN_SYSTEM_CHANGE;
-    rpInfo.dwRestorePtType = APPLICATION_INSTALL;
-    rpInfo.llSequenceNumber = 0;
-    strncpy(rpInfo.szDescription, desc, sizeof(rpInfo.szDescription) - 1);
+    snprintf(command, sizeof(command),
+        "powershell.exe -Command \"Checkpoint-Computer -Description '%s' -RestorePointType 'APPLICATION_INSTALL'\"",
+        desc);
 
-    if (!SRSetRestorePoint(&rpInfo, &smStatus)) {
-        printf("Failed to create restore point: error %ld\n", GetLastError());
-        return;
+    int result = system(command);
+
+    if (result != 0) {
+        printf("Failed to create restore point. Return code: %d\n", result);
+    } else {
+        printf("System Restore Point created: %s\n", desc);
     }
-
-    rpInfo.dwEventType = END_SYSTEM_CHANGE;
-    if (!SRSetRestorePoint(&rpInfo, &smStatus)) {
-        printf(" Failed to end restore point\n");
-        return;
-    }
-
-    printf("System Restore Point created: %s\n", desc);
 }
 
 void reboot_system() {
@@ -92,24 +87,108 @@ void run_command(const char* cmd) {
 void apply_registry(cJSON* registry) {
     if (!registry) return;
     int len = cJSON_GetArraySize(registry);
+
     for (int i = 0; i < len; i++) {
         cJSON* entry = cJSON_GetArrayItem(registry, i);
         const char* path = cJSON_GetObjectItem(entry, "path")->valuestring;
         const char* name = cJSON_GetObjectItem(entry, "name")->valuestring;
-        const char* type = cJSON_GetObjectItem(entry, "type")->valuestring;
-        const char* value = cJSON_GetObjectItem(entry, "value")->valuestring;
 
-        char cmd[1024];
-        sprintf(cmd, "reg add \"%s\" /v \"%s\" /t %s /d \"%s\" /f",
-                path, name, type, value);
-        run_command(cmd);
+        // Check if it's a shell extension (has "command")
+        cJSON* cmd_item = cJSON_GetObjectItem(entry, "command");
+        if (cmd_item) {
+            const char* command = cmd_item->valuestring;
+
+            // Add main registry key
+            char reg_cmd[1024];
+            sprintf(reg_cmd, "reg add \"%s\" /ve /d \"%s\" /f", path, name);
+            run_command(reg_cmd);
+
+            // Optional icon
+            cJSON* icon_item = cJSON_GetObjectItem(entry, "icon");
+            if (icon_item && icon_item->valuestring) {
+                char reg_icon[1024];
+                sprintf(reg_icon, "reg add \"%s\" /v Icon /d \"%s\" /f", path, icon_item->valuestring);
+                run_command(reg_icon);
+            }
+
+            // Add command subkey
+            char command_key[1024];
+            sprintf(command_key, "%s\\command", path);
+            char reg_command[1024];
+            sprintf(reg_command, "reg add \"%s\" /ve /d \"%s\" /f", command_key, command);
+            run_command(reg_command);
+
+            printf("📎 Shell extension: %s → %s\n", name, command);
+        }
+        // Else it's a raw value entry (with value_name/value_type/value_data)
+        else {
+            const char* value_name = cJSON_GetObjectItem(entry, "value_name")->valuestring;
+            const char* value_type = cJSON_GetObjectItem(entry, "value_type")->valuestring;
+            const char* value_data = cJSON_GetObjectItem(entry, "value_data")->valuestring;
+
+            char reg_cmd[1024];
+            sprintf(reg_cmd, "reg add \"%s\" /v \"%s\" /t %s /d \"%s\" /f",
+                    path, value_name, value_type, value_data);
+            run_command(reg_cmd);
+
+            printf("🔧 Registry: %s\\%s = %s (%s)\n", path, value_name, value_data, value_type);
+        }
     }
 }
 void apply_wallpaper(cJSON* config) {
     cJSON* wall = cJSON_GetObjectItem(config, "wallpaper");
+    cJSON* lock = cJSON_GetObjectItem(config, "lockscreen_wallpaper");
+    cJSON* interval = cJSON_GetObjectItem(config, "wallpaper_interval");
+
+    int time_min = 1;  // default: 1 minute
+    if (interval && cJSON_IsNumber(interval)) {
+        time_min = interval->valueint;
+    }
+    int time_ms = time_min * 60000;
+
     if (wall && wall->valuestring && strlen(wall->valuestring) > 0) {
-        SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)wall->valuestring, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-        printf(" Wallpaper set to: %s\n", wall->valuestring);
+        const char* path = wall->valuestring;
+        DWORD attr = GetFileAttributesA(path);
+        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            // Slideshow mode
+            char reg1[512], reg2[512], reg3[512], reg4[512];
+
+            snprintf(reg1, sizeof(reg1),
+                "reg add \"HKCU\\Control Panel\\Personalization\\Desktop Slideshow\" "
+                "/v Interval /t REG_DWORD /d %d /f", time_ms);
+
+            snprintf(reg2, sizeof(reg2),
+                "reg add \"HKCU\\Control Panel\\Personalization\\Desktop Slideshow\" "
+                "/v Shuffle /t REG_DWORD /d 1 /f");
+
+            snprintf(reg3, sizeof(reg3),
+                "reg add \"HKCU\\Control Panel\\Desktop\" /v Wallpaper /t REG_SZ /d \"\" /f");
+
+            snprintf(reg4, sizeof(reg4),
+                "reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers\" "
+                "/v SlideshowDirectory /t REG_SZ /d \"%s\" /f", path);
+
+            run_command(reg1);
+            run_command(reg2);
+            run_command(reg3);
+            run_command(reg4);
+
+            SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, "", SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            printf("Wallpaper slideshow enabled from: %s (Interval: %d min)\n", path, time_min); 
+        } else {
+            // Single file
+            SystemParametersInfoA(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            printf("Wallpaper set to: %s\n", path);
+        }
+    }
+
+    if (lock && lock->valuestring && strlen(lock->valuestring) > 0) {
+        char reg_cmd[1024];
+        snprintf(reg_cmd, sizeof(reg_cmd),
+            "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization\" "
+            "/v LockScreenImage /t REG_SZ /d \"%s\" /f", lock->valuestring);
+        run_command(reg_cmd);
+        printf("Lock screen wallpaper set to: %s\n", lock->valuestring);
     }
 }
 
@@ -243,6 +322,7 @@ int create_default_config() {
 }
 
 int apply_config() {
+    create_restore_point("WinState v" WINSTATE_VERSION " applied");
     FILE* f = fopen(config_path, "r");
     if (!f) {
         printf("Could not open %s\n", config_path);
@@ -254,14 +334,21 @@ int apply_config() {
     fseek(f, 0, SEEK_SET);
 
     char* data = malloc(len + 1);
+    if (!data) {
+        fclose(f);
+        printf("Memory allocation failed\n");
+        return 1;
+    }
+
     fread(data, 1, len, f);
     data[len] = '\0';
     fclose(f);
 
     cJSON* config = cJSON_Parse(data);
     free(data);
+
     if (!config) {
-        printf("Invalid JSON\n");
+        printf("Invalid JSON in %s\n", config_path);
         return 1;
     }
 
@@ -279,8 +366,12 @@ int apply_config() {
     install_package_list(cJSON_GetObjectItem(config, "winget"), "winget");
 
     cJSON_Delete(config);
-    create_restore_point("WinState v" WINSTATE_VERSION " applied");
-    reboot_system();
+
+    printf("Configuration from %s applied successfully.\n", config_path);
+    printf("Applied");
+
+    reboot_system();  // Optional: comment this if testing without reboot
+
     return 0;
 }
 // Utility: read entire file into string
@@ -494,6 +585,45 @@ int add_command(int argc, char* argv[]) {
         printf("Entering interactive registry entry mode. Press Enter without input to stop.\n");
         add_registry_prompt(config);
     }
+    else if (strcmp(type, "lockwall") == 0) {
+        if (argc < 4) {
+            printf("Missing lockscreen wallpaper path\n");
+            cJSON_Delete(config);
+            return 1;
+        }
+
+        cJSON* lock = cJSON_GetObjectItem(config, "lockscreen_wallpaper");
+        if (lock) {
+            cJSON_SetValuestring(lock, argv[3]);
+        } else {
+            cJSON_AddStringToObject(config, "lockscreen_wallpaper", argv[3]);
+        }
+
+        printf("Set lockscreen wallpaper to: %s\n", argv[3]);
+    }
+    else if (strcmp(type, "wti") == 0) {
+        if (argc < 4) {
+            printf("Missing wallpaper interval (in minutes)\n");
+            cJSON_Delete(config);
+            return 1;
+        }
+
+        int mins = atoi(argv[3]);
+        if (mins <= 0) {
+            printf("Invalid interval: %s\n", argv[3]);
+            cJSON_Delete(config);
+            return 1;
+        }
+
+        cJSON* wti = cJSON_GetObjectItem(config, "wallpaper_interval");
+        if (wti) {
+            wti->valueint = mins;
+        } else {
+            cJSON_AddNumberToObject(config, "wallpaper_interval", mins);
+        }
+
+        printf("Set wallpaper slideshow interval to: %d minutes\n", mins);
+    }
     else {
         printf("Unknown add type '%s'\n", type);
         cJSON_Delete(config);
@@ -512,12 +642,11 @@ int add_command(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-    init_config_path();
+    init_config_path(); // Always initialize config_path
     if (argc < 2) {
         printf("Usage: %s [init|apply|add]\n", argv[0]);
         return 1;
     }
-
     if (strcmp(argv[1], "init") == 0) {
         return create_default_config();
     } else if (strcmp(argv[1], "apply") == 0) {
