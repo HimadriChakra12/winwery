@@ -343,7 +343,7 @@ int apply_config() {
     printf("Configuration from %s applied successfully.\n", config_path);
     printf("Applied");
 
-    reboot_system();  // Optional: comment this if testing without reboot
+    //reboot_system();  // Optional: comment this if testing without reboot
 
     return 0;
 }
