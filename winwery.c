@@ -15,31 +15,44 @@
 
 #pragma comment(lib, "srclient.lib")
 
-#define WINSTATE_VERSION "1.0.0"
+#define WINSTATE_VERSION "2.0.0"
 #define BUILD_DATE __DATE__ " " __TIME__
+#define CONFIG_FILENAME "winstate.json"
 
 // Declare globally
 char config_path[MAX_PATH];
+int dry_run = 0;
 
 // Must be called at start of main()
-void init_config_path() {
+void init_config_path(const char* profile) {
     SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, config_path);
-    strcat(config_path, "\\winstate.json");
+    if (profile) {
+        strcat(config_path, "\\.winstate\\profiles\\");
+        strcat(config_path, profile);
+    } else {
+        strcat(config_path, "\\");
+    }
+    strcat(config_path, CONFIG_FILENAME);
 }
 
-void create_restore_point(const char* desc) {
-    char command[512];
+void create_restore_point(const char* desc_prefix) {
+    char timestamp[64];
+    time_t now = time(NULL);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
 
+    char desc[256];
+    snprintf(desc, sizeof(desc), "%s @ %s", desc_prefix, timestamp);
+
+    char command[512];
     snprintf(command, sizeof(command),
-            "powershell.exe -Command \"Checkpoint-Computer -Description '%s' -RestorePointType 'APPLICATION_INSTALL'\"",
-            desc);
+        "powershell.exe -Command \"Checkpoint-Computer -Description '%s' -RestorePointType 'APPLICATION_INSTALL'\"",
+        desc);
 
     int result = system(command);
-
-    if (result != 0) {
-        printf("Failed to create restore point. Return code: %d\n", result);
-    } else {
+    if (result == 0) {
         printf("System Restore Point created: %s\n", desc);
+    } else {
+        printf("Failed to create restore point.\n");
     }
 }
 
@@ -81,7 +94,7 @@ void reboot_system() {
 
 void run_command(const char* cmd) {
     printf("Running: %s\n", cmd);
-    system(cmd);
+    if (!dry_run) system(cmd);
 }
 
 void apply_registry(cJSON* registry) {
@@ -615,19 +628,38 @@ int add_command(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-    init_config_path(); // Always initialize config_path
+    const char* profile = NULL;
+
+    if (argc > 2 && strcmp(argv[1], "--profile") == 0) {
+        profile = argv[2];
+        argc -= 2;
+        argv += 2;
+    }
+
+    init_config_path(profile);
+
     if (argc < 2) {
-        printf("Usage: %s [init|apply|add]\n", argv[0]);
+        printf("Usage: %s [--profile name] [apply|init|describe|rollback|--dryrun]\n", argv[0]);
         return 1;
     }
-    if (strcmp(argv[1], "init") == 0) {
-        return create_default_config();
-    } else if (strcmp(argv[1], "apply") == 0) {
+
+    if (strcmp(argv[1], "--dryrun") == 0) {
+        dry_run = 1;
+        argv++;
+        argc--;
+    }
+
+    if (strcmp(argv[1], "apply") == 0) {
         return apply_config();
-    } else if (strcmp(argv[1], "add") == 0) {
-        return add_command(argc, argv);
-    } else {
-        printf("Unknown command '%s'\n", argv[1]);
-        return 1;
+    } else if (strcmp(argv[1], "describe") == 0) {
+        printf("WinState Version: %s\n", WINSTATE_VERSION);
+        printf("Using config: %s\n", config_path);
+        return 0;
+    } else if (strcmp(argv[1], "rollback") == 0) {
+        system("powershell.exe -Command \"Restore-Computer -Confirm:$false\"");
+        return 0;
     }
+
+    printf("Unknown command '%s'\n", argv[1]);
+    return 1;
 }
