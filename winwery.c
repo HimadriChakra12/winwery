@@ -12,6 +12,7 @@
 #include <shlobj.h>
 #include <time.h>
 #include <io.h>
+#include <shellapi.h>
 
 #pragma comment(lib, "srclient.lib")
 
@@ -259,15 +260,71 @@ void apply_git_repo(cJSON* config) {
     }
 }
 
-void install_package_list(cJSON* list, const char* tool) {
-    if (!list) return;
-    int len = cJSON_GetArraySize(list);
+void apply_scoop_buckets(cJSON* buckets) {
+    if (!buckets) return;
+
+    int len = cJSON_GetArraySize(buckets);
     for (int i = 0; i < len; i++) {
-        const char* pkg = cJSON_GetArrayItem(list, i)->valuestring;
-        char cmd[256];
-        sprintf(cmd, "%s install -y %s", tool, pkg);
+        cJSON* entry = cJSON_GetArrayItem(buckets, i);
+        if (!cJSON_IsObject(entry)) continue;
+
+        cJSON* name = cJSON_GetObjectItem(entry, "name");
+        cJSON* url = cJSON_GetObjectItem(entry, "url");
+
+        if (!name || !url || !name->valuestring || !url->valuestring) continue;
+
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "scoop bucket add %s %s", name->valuestring, url->valuestring);
+        run_command(cmd);
+        printf("🪣 Added scoop bucket: %s (%s)\n", name->valuestring, url->valuestring);
+    }
+}
+
+void apply_iex_scripts(cJSON* scripts) {
+    if (!scripts) return;
+    int len = cJSON_GetArraySize(scripts);
+    for (int i = 0; i < len; i++) {
+        const char* line = cJSON_GetArrayItem(scripts, i)->valuestring;
+        char cmd[1024];
+        sprintf(cmd, "powershell -Command \"%s\"", line);
         run_command(cmd);
     }
+}
+
+void install_choco_packages(cJSON* packages) {
+    if (!packages) return;
+    int len = cJSON_GetArraySize(packages);
+    for (int i = 0; i < len; i++) {
+        const char* pkg = cJSON_GetArrayItem(packages, i)->valuestring;
+        char cmd[512];
+        sprintf(cmd, "choco install %s -y", pkg);
+        run_command(cmd);
+    }
+}
+void install_scoop_packages(cJSON* packages) {
+    if (!packages) return;
+    int len = cJSON_GetArraySize(packages);
+    for (int i = 0; i < len; i++) {
+        const char* pkg = cJSON_GetArrayItem(packages, i)->valuestring;
+        char cmd[512];
+        sprintf(cmd, "scoop install %s", pkg);
+        run_command(cmd);
+    }
+}
+
+void add_scoop_bucket(cJSON* config, const char* name, const char* url) {
+    cJSON* buckets = cJSON_GetObjectItem(config, "scoop_buckets");
+    if (!buckets) {
+        buckets = cJSON_CreateArray();
+        cJSON_AddItemToObject(config, "scoop_buckets", buckets);
+    }
+
+    cJSON* obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "name", name);
+    cJSON_AddStringToObject(obj, "url", url);
+    cJSON_AddItemToArray(buckets, obj);
+
+    printf("Added scoop bucket: %s (%s)\n", name, url);
 }
 
 // Creates default winstate.json if missing
@@ -306,6 +363,234 @@ int create_default_config() {
     printf(" Created default %s\n", config_path);
     return 0;
 }
+
+
+void backup_settings_to_config(cJSON* config) {
+    if (!config) return;
+
+    // Ensure folder exists
+    char folder[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, folder);
+    strcat(folder, "\\state\\");
+    CreateDirectoryA(folder, NULL);
+
+    // --------- BACKUP DEFAULT APPS ---------
+    char defapp_path[MAX_PATH];
+    sprintf(defapp_path, "%sdefault_apps.xml", folder);
+
+    char cmd1[512];
+    sprintf(cmd1, "dism /Online /Export-DefaultAppAssociations:%s", defapp_path);
+    run_command(cmd1);
+
+    FILE* f1 = fopen(defapp_path, "r");
+    if (f1) {
+        fseek(f1, 0, SEEK_END);
+        long len = ftell(f1);
+        fseek(f1, 0, SEEK_SET);
+        char* xml = malloc(len + 1);
+        fread(xml, 1, len, f1);
+        xml[len] = '\0';
+        fclose(f1);
+
+        cJSON* node = cJSON_GetObjectItem(config, "default_apps");
+        if (node) cJSON_ReplaceItemInObject(config, "default_apps", cJSON_CreateString(xml));
+        else cJSON_AddStringToObject(config, "default_apps", xml);
+        free(xml);
+        printf("✅ Backed up default apps\n");
+    }
+
+    // --------- BACKUP START MENU LAYOUT ---------
+    char layout_path[MAX_PATH];
+    sprintf(layout_path, "%sstart_layout.xml", folder);
+
+    char cmd2[512];
+    sprintf(cmd2, "powershell -Command \"Export-StartLayout -Path '%s'\"", layout_path);
+    run_command(cmd2);
+
+    FILE* f2 = fopen(layout_path, "r");
+    if (f2) {
+        fseek(f2, 0, SEEK_END);
+        long len = ftell(f2);
+        fseek(f2, 0, SEEK_SET);
+        char* xml = malloc(len + 1);
+        fread(xml, 1, len, f2);
+        xml[len] = '\0';
+        fclose(f2);
+
+        cJSON* node = cJSON_GetObjectItem(config, "start_layout");
+        if (node) cJSON_ReplaceItemInObject(config, "start_layout", cJSON_CreateString(xml));
+        else cJSON_AddStringToObject(config, "start_layout", xml);
+        free(xml);
+        printf("✅ Backed up Start layout\n");
+    }
+
+    // --------- BACKUP ENVIRONMENT VARIABLES ---------
+    cJSON* env_arr = cJSON_GetObjectItem(config, "env_vars");
+    if (!env_arr) {
+        env_arr = cJSON_CreateArray();
+        cJSON_AddItemToObject(config, "env_vars", env_arr);
+    }
+
+    char* vars[] = {"PATH", "TEMP", "TMP", "USERNAME", "APPDATA", "LOCALAPPDATA", "ProgramFiles", NULL};
+    for (int i = 0; vars[i]; i++) {
+        char* val = getenv(vars[i]);
+        if (val) {
+            cJSON* var = cJSON_CreateObject();
+            cJSON_AddStringToObject(var, "name", vars[i]);
+            cJSON_AddStringToObject(var, "value", val);
+            cJSON_AddItemToArray(env_arr, var);
+        }
+    }
+    printf("✅ Backed up environment variables\n");
+}
+
+void backup_system_settings(cJSON* config) {
+    if (!config) return;
+
+    // Ensure folder exists
+    char folder[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, folder);
+    strcat(folder, "\\state\\");
+    CreateDirectoryA(folder, NULL);
+
+    // --------- BACKUP DEFAULT APPS ---------
+    char defapp_path[MAX_PATH];
+    sprintf(defapp_path, "%sdefault_apps.xml", folder);
+
+    char cmd1[512];
+    sprintf(cmd1, "dism /Online /Export-DefaultAppAssociations:%s", defapp_path);
+    run_command(cmd1);
+
+    FILE* f1 = fopen(defapp_path, "r");
+    if (f1) {
+        fseek(f1, 0, SEEK_END);
+        long len = ftell(f1);
+        fseek(f1, 0, SEEK_SET);
+        char* xml = malloc(len + 1);
+        fread(xml, 1, len, f1);
+        xml[len] = '\0';
+        fclose(f1);
+
+        cJSON* node = cJSON_GetObjectItem(config, "default_apps");
+        if (node) cJSON_ReplaceItemInObject(config, "default_apps", cJSON_CreateString(xml));
+        else cJSON_AddStringToObject(config, "default_apps", xml);
+        free(xml);
+        printf("✅ Backed up default apps\n");
+    }
+
+    // --------- BACKUP START MENU LAYOUT ---------
+    char layout_path[MAX_PATH];
+    sprintf(layout_path, "%sstart_layout.xml", folder);
+
+    char cmd2[512];
+    sprintf(cmd2, "powershell -Command \"Export-StartLayout -Path '%s'\"", layout_path);
+    run_command(cmd2);
+
+    FILE* f2 = fopen(layout_path, "r");
+    if (f2) {
+        fseek(f2, 0, SEEK_END);
+        long len = ftell(f2);
+        fseek(f2, 0, SEEK_SET);
+        char* xml = malloc(len + 1);
+        fread(xml, 1, len, f2);
+        xml[len] = '\0';
+        fclose(f2);
+
+        cJSON* node = cJSON_GetObjectItem(config, "start_layout");
+        if (node) cJSON_ReplaceItemInObject(config, "start_layout", cJSON_CreateString(xml));
+        else cJSON_AddStringToObject(config, "start_layout", xml);
+        free(xml);
+        printf("✅ Backed up Start layout\n");
+    }
+
+    // --------- BACKUP ENVIRONMENT VARIABLES ---------
+    cJSON* env_arr = cJSON_GetObjectItem(config, "env_vars");
+    if (!env_arr) {
+        env_arr = cJSON_CreateArray();
+        cJSON_AddItemToObject(config, "env_vars", env_arr);
+    }
+
+    char* vars[] = {"PATH", "TEMP", "TMP", "USERNAME", "APPDATA", "LOCALAPPDATA", "ProgramFiles", NULL};
+    for (int i = 0; vars[i]; i++) {
+        char* val = getenv(vars[i]);
+        if (val) {
+            cJSON* var = cJSON_CreateObject();
+            cJSON_AddStringToObject(var, "name", vars[i]);
+            cJSON_AddStringToObject(var, "value", val);
+            cJSON_AddItemToArray(env_arr, var);
+        }
+    }
+    printf("✅ Backed up environment variables\n");
+}
+
+
+void ensure_backup_folder() {
+    char path[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, path);
+    strcat(path, "\\state\\");
+    CreateDirectoryA(path, NULL);  // Creates if not exists
+}
+
+void apply_system_config(cJSON* config) {
+    if (!config) return;
+
+    ensure_backup_folder();
+
+    char basepath[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, basepath);
+    strcat(basepath, "\\state\\");
+
+    // Apply environment variables
+    cJSON* env = cJSON_GetObjectItem(config, "env_vars");
+    if (env) {
+        int len = cJSON_GetArraySize(env);
+        for (int i = 0; i < len; i++) {
+            cJSON* pair = cJSON_GetArrayItem(env, i);
+            const char* name = cJSON_GetObjectItem(pair, "name")->valuestring;
+            const char* value = cJSON_GetObjectItem(pair, "value")->valuestring;
+
+            char cmd[512];
+            sprintf(cmd, "setx %s \"%s\"", name, value);
+            run_command(cmd);
+            printf("🌿 Set env var: %s = %s\n", name, value);
+        }
+    }
+
+    // Apply default apps from XML
+    cJSON* dapps = cJSON_GetObjectItem(config, "default_apps");
+    if (dapps && dapps->valuestring && strlen(dapps->valuestring)) {
+        char defapp_path[MAX_PATH];
+        sprintf(defapp_path, "%sdefault_apps.xml", basepath);
+        FILE* f = fopen(defapp_path, "w");
+        if (f) {
+            fputs(dapps->valuestring, f);
+            fclose(f);
+
+            char cmd[512];
+            sprintf(cmd, "dism /Online /Import-DefaultAppAssociations:%s", defapp_path);
+            run_command(cmd);
+            printf("🧩 Imported default apps from %s\n", defapp_path);
+        }
+    }
+
+    // Apply Start layout
+    cJSON* layout = cJSON_GetObjectItem(config, "start_layout");
+    if (layout && layout->valuestring && strlen(layout->valuestring)) {
+        char layout_path[MAX_PATH];
+        sprintf(layout_path, "%sstart_layout.xml", basepath);
+        FILE* f = fopen(layout_path, "w");
+        if (f) {
+            fputs(layout->valuestring, f);
+            fclose(f);
+
+            char cmd[512];
+            sprintf(cmd, "powershell -Command \"Import-StartLayout -LayoutPath '%s' -MountPath C:\\\"", layout_path);
+            run_command(cmd);
+            printf("🪟 Imported Start layout from %s\n", layout_path);
+        }
+    }
+}
+
 
 int apply_config() {
     create_restore_point("WinState v" WINSTATE_VERSION " applied");
@@ -347,10 +632,12 @@ int apply_config() {
     apply_hostname(config);
     apply_timezone(config);
     apply_wallpaper(config);
-    install_package_list(cJSON_GetObjectItem(config, "choco"), "choco");
-    install_package_list(cJSON_GetObjectItem(config, "scoop"), "scoop");
-    install_package_list(cJSON_GetObjectItem(config, "winget"), "winget");
+    apply_iex_scripts(cJSON_GetObjectItem(config, "iex_scripts"));
+    apply_scoop_buckets(cJSON_GetObjectItem(config, "scoop_buckets"));
+    install_choco_packages(cJSON_GetObjectItem(config, "choco"));
+    install_scoop_packages(cJSON_GetObjectItem(config, "scoop"));
 
+    apply_system_config(config);  // <-- Add this before cJSON_Delete(config);
     cJSON_Delete(config);
 
     printf("Configuration from %s applied successfully.\n", config_path);
@@ -610,11 +897,20 @@ int add_command(int argc, char* argv[]) {
 
         printf("Set wallpaper slideshow interval to: %d minutes\n", mins);
     }
+    else if (strcmp(type, "scbuc") == 0) {
+        if (argc < 5) {
+            printf("Missing bucket name or URL\n");
+            cJSON_Delete(config);
+            return 1;
+        }
+        add_scoop_bucket(config, argv[3], argv[4]);
+    }
     else {
         printf("Unknown add type '%s'\n", type);
         cJSON_Delete(config);
         return 1;
     }
+
 
     if (!save_config(config)) {
         printf("Failed to save %s\n", config_path);
@@ -651,12 +947,28 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1], "apply") == 0) {
         return apply_config();
+    } else if (strcmp(argv[1], "add") == 0) {
+        return add_command(argc, argv);
     } else if (strcmp(argv[1], "describe") == 0) {
         printf("WinState Version: %s\n", WINSTATE_VERSION);
         printf("Using config: %s\n", config_path);
         return 0;
     } else if (strcmp(argv[1], "rollback") == 0) {
         system("powershell.exe -Command \"Restore-Computer -Confirm:$false\"");
+        return 0;
+    }
+    else if (strcmp(argv[1], "backup") == 0) {
+        char* data = read_file(config_path);
+        if (!data) {
+            printf("Cannot open config\n");
+            return 1;
+        }
+        cJSON* config = cJSON_Parse(data);
+        free(data);
+        if (!config) return 1;
+        backup_settings_to_config(config);
+        save_config(config);
+        cJSON_Delete(config);
         return 0;
     }
 
