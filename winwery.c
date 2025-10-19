@@ -374,7 +374,6 @@ void backup_settings_to_config(cJSON* config) {
     strcat(folder, "\\state\\");
     CreateDirectoryA(folder, NULL);
 
-    // --------- BACKUP DEFAULT APPS ---------
     char defapp_path[MAX_PATH];
     sprintf(defapp_path, "%sdefault_apps.xml", folder);
 
@@ -399,7 +398,48 @@ void backup_settings_to_config(cJSON* config) {
         printf("✅ Backed up default apps\n");
     }
 
-    // --------- BACKUP START MENU LAYOUT ---------
+    char env_path[MAX_PATH];
+    snprintf(env_path, sizeof(env_path), "%s\\env.bak", folder);
+
+    // Export all env vars using PowerShell safely
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "powershell -NoProfile -Command \"Get-ChildItem Env: | "
+             "ForEach-Object { $_.Name + '=' + $_.Value } | "
+             "Out-File -FilePath '%s' -Encoding UTF8\"",
+             env_path);
+    run_command(cmd);
+
+    // Load the contents into JSON
+    FILE* f = fopen(env_path, "r");
+    if (!f) {
+        printf("⚠️ Failed to read %s\n", env_path);
+        return;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char* buf = malloc(len + 1);
+    if (!buf) {
+        fclose(f);
+        printf("⚠️ Memory allocation failed\n");
+        return;
+    }
+
+    fread(buf, 1, len, f);
+    buf[len] = '\0';
+    fclose(f);
+
+    cJSON* node = cJSON_GetObjectItem(config, "env_backup");
+    if (node)
+        cJSON_ReplaceItemInObject(config, "env_backup", cJSON_CreateString(buf));
+    else
+        cJSON_AddStringToObject(config, "env_backup", buf);
+
+    free(buf);
+    printf("✅ Environment variables backed up to %s\n", env_path);
     char layout_path[MAX_PATH];
     sprintf(layout_path, "%sstart_layout.xml", folder);
 
@@ -424,25 +464,8 @@ void backup_settings_to_config(cJSON* config) {
         printf("✅ Backed up Start layout\n");
     }
 
-    // --------- BACKUP ENVIRONMENT VARIABLES ---------
-    cJSON* env_arr = cJSON_GetObjectItem(config, "env_vars");
-    if (!env_arr) {
-        env_arr = cJSON_CreateArray();
-        cJSON_AddItemToObject(config, "env_vars", env_arr);
-    }
-
-    char* vars[] = {"PATH", "TEMP", "TMP", "USERNAME", "APPDATA", "LOCALAPPDATA", "ProgramFiles", NULL};
-    for (int i = 0; vars[i]; i++) {
-        char* val = getenv(vars[i]);
-        if (val) {
-            cJSON* var = cJSON_CreateObject();
-            cJSON_AddStringToObject(var, "name", vars[i]);
-            cJSON_AddStringToObject(var, "value", val);
-            cJSON_AddItemToArray(env_arr, var);
-        }
-    }
-    printf("✅ Backed up environment variables\n");
 }
+
 
 void backup_system_settings(cJSON* config) {
     if (!config) return;
@@ -478,6 +501,49 @@ void backup_system_settings(cJSON* config) {
         printf("✅ Backed up default apps\n");
     }
 
+    char env_path[MAX_PATH];
+    snprintf(env_path, sizeof(env_path), "%s\\env.bak", folder);
+
+    // Export all env vars using PowerShell safely
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "powershell -NoProfile -Command \"Get-ChildItem Env: | "
+             "ForEach-Object { $_.Name + '=' + $_.Value } | "
+             "Out-File -FilePath '%s' -Encoding UTF8\"",
+             env_path);
+    run_command(cmd);
+
+    // Load the contents into JSON
+    FILE* f = fopen(env_path, "r");
+    if (!f) {
+        printf("⚠️ Failed to read %s\n", env_path);
+        return;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char* buf = malloc(len + 1);
+    if (!buf) {
+        fclose(f);
+        printf("⚠️ Memory allocation failed\n");
+        return;
+    }
+
+    fread(buf, 1, len, f);
+    buf[len] = '\0';
+    fclose(f);
+
+    cJSON* node = cJSON_GetObjectItem(config, "env_backup");
+    if (node)
+        cJSON_ReplaceItemInObject(config, "env_backup", cJSON_CreateString(buf));
+    else
+        cJSON_AddStringToObject(config, "env_backup", buf);
+
+    free(buf);
+    printf("✅ Environment variables backed up to %s\n", env_path);
+
     // --------- BACKUP START MENU LAYOUT ---------
     char layout_path[MAX_PATH];
     sprintf(layout_path, "%sstart_layout.xml", folder);
@@ -502,28 +568,48 @@ void backup_system_settings(cJSON* config) {
         free(xml);
         printf("✅ Backed up Start layout\n");
     }
-
-    // --------- BACKUP ENVIRONMENT VARIABLES ---------
-    cJSON* env_arr = cJSON_GetObjectItem(config, "env_vars");
-    if (!env_arr) {
-        env_arr = cJSON_CreateArray();
-        cJSON_AddItemToObject(config, "env_vars", env_arr);
-    }
-
-    char* vars[] = {"PATH", "TEMP", "TMP", "USERNAME", "APPDATA", "LOCALAPPDATA", "ProgramFiles", NULL};
-    for (int i = 0; vars[i]; i++) {
-        char* val = getenv(vars[i]);
-        if (val) {
-            cJSON* var = cJSON_CreateObject();
-            cJSON_AddStringToObject(var, "name", vars[i]);
-            cJSON_AddStringToObject(var, "value", val);
-            cJSON_AddItemToArray(env_arr, var);
-        }
-    }
-    printf("✅ Backed up environment variables\n");
 }
 
 
+void import_env() {
+
+    // Resolve the ~/state folder and env.bak path
+    char folder[MAX_PATH];
+    sprintf(folder, "%s\\state\\", getenv("USERPROFILE"));
+    char env_path[MAX_PATH];
+    sprintf(env_path, "%senv.bak", folder);
+
+    FILE* f_env = _wfopen(L"C:\\Users\\%USERNAME%\\state\\env.bak", L"r, ccs=UTF-8");
+
+    // (Better: use wide version of env_path)
+    wchar_t wenv_path[MAX_PATH];
+    mbstowcs(wenv_path, env_path, MAX_PATH);
+    FILE* f = _wfopen(wenv_path, L"r, ccs=UTF-8");
+
+    if (!f) {
+        printf("⚠️ Could not open ~/state/env.bak for restoring environment.\n");
+    } else {
+        wchar_t line[8192];
+        while (fgetws(line, 8192, f)) {
+            wchar_t *eq = wcschr(line, L'=');
+            if (!eq) continue;
+            *eq = 0;
+            wchar_t *name = line;
+            wchar_t *value = eq + 1;
+
+            // Strip newline / carriage return
+            wchar_t *nl = wcschr(value, L'\n');
+            if (nl) *nl = 0;
+            nl = wcschr(value, L'\r');
+            if (nl) *nl = 0;
+
+            if (wcslen(name) > 0)
+                SetEnvironmentVariableW(name, value);
+        }
+        fclose(f);
+        printf("✅ Environment variables restored from ~/state/env.bak\n");
+    }
+}
 void ensure_backup_folder() {
     char path[MAX_PATH];
     SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, path);
@@ -540,21 +626,6 @@ void apply_system_config(cJSON* config) {
     SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, basepath);
     strcat(basepath, "\\state\\");
 
-    // Apply environment variables
-    cJSON* env = cJSON_GetObjectItem(config, "env_vars");
-    if (env) {
-        int len = cJSON_GetArraySize(env);
-        for (int i = 0; i < len; i++) {
-            cJSON* pair = cJSON_GetArrayItem(env, i);
-            const char* name = cJSON_GetObjectItem(pair, "name")->valuestring;
-            const char* value = cJSON_GetObjectItem(pair, "value")->valuestring;
-
-            char cmd[512];
-            sprintf(cmd, "setx %s \"%s\"", name, value);
-            run_command(cmd);
-            printf("🌿 Set env var: %s = %s\n", name, value);
-        }
-    }
 
     // Apply default apps from XML
     cJSON* dapps = cJSON_GetObjectItem(config, "default_apps");
@@ -623,6 +694,7 @@ int apply_config() {
         return 1;
     }
 
+    import_env();
     apply_hooks(cJSON_GetObjectItem(config, "hooks"));
     apply_git_repo(config);
     apply_reg_files(cJSON_GetObjectItem(config, "reg_files"));
