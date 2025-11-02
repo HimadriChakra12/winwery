@@ -19,6 +19,138 @@
 #define WINSTATE_VERSION "2.0.0"
 #define BUILD_DATE __DATE__ " " __TIME__
 #define CONFIG_FILENAME "winstate.json"
+#define WINSTATE_DIR "\\.winstate\\profiles\\"
+#define CONFIG_FILE "\\winstate.json"
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+#include "cJSON.h"  // assuming you're using your existing parser
+
+void apply_winstate(const char *json_data) {
+    cJSON *root = cJSON_Parse(json_data);
+    if (!root) {
+        fprintf(stderr, "❌ Failed to parse winstate.json\n");
+        return;
+    }
+
+    printf("🧩 Parsing Winwery config...\n");
+
+    // Apply registry entries
+    cJSON *registry = cJSON_GetObjectItem(root, "registry");
+    if (registry && cJSON_IsArray(registry)) {
+        int count = cJSON_GetArraySize(registry);
+        for (int i = 0; i < count; i++) {
+            cJSON *entry = cJSON_GetArrayItem(registry, i);
+            const char *path = cJSON_GetObjectItem(entry, "path")->valuestring;
+            const char *name = cJSON_GetObjectItem(entry, "value_name")->valuestring;
+            const char *type = cJSON_GetObjectItem(entry, "value_type")->valuestring;
+            const char *data = cJSON_GetObjectItem(entry, "value_data")->valuestring;
+
+            char cmd[1024];
+            sprintf(cmd, "reg add \"%s\" /v \"%s\" /t %s /d %s /f", path, name, type, data);
+            system(cmd);
+            printf("🧱 Registry: %s\\%s\n", path, name);
+        }
+    }
+
+    // Run iex_scripts (PowerShell inline commands)
+    cJSON *iex = cJSON_GetObjectItem(root, "iex_scripts");
+    if (iex && cJSON_IsArray(iex)) {
+        int count = cJSON_GetArraySize(iex);
+        for (int i = 0; i < count; i++) {
+            const char *cmd = cJSON_GetArrayItem(iex, i)->valuestring;
+            char ps[2048];
+            sprintf(ps, "powershell -Command \"%s\"", cmd);
+            system(ps);
+            printf("⚙️  %s\n", cmd);
+        }
+    }
+
+    // Apply choco installs
+    cJSON *choco = cJSON_GetObjectItem(root, "choco");
+    if (choco && cJSON_IsArray(choco)) {
+        int count = cJSON_GetArraySize(choco);
+        for (int i = 0; i < count; i++) {
+            const char *pkg = cJSON_GetArrayItem(choco, i)->valuestring;
+            char cmd[256];
+            sprintf(cmd, "choco install %s -y", pkg);
+            system(cmd);
+            printf("📦 Installed: %s\n", pkg);
+        }
+    }
+
+    // Apply scoop installs
+    cJSON *scoop = cJSON_GetObjectItem(root, "scoop");
+    if (scoop && cJSON_IsArray(scoop)) {
+        int count = cJSON_GetArraySize(scoop);
+        for (int i = 0; i < count; i++) {
+            const char *pkg = cJSON_GetArrayItem(scoop, i)->valuestring;
+            char cmd[256];
+            sprintf(cmd, "scoop install %s", pkg);
+            system(cmd);
+            printf("🪣 Scoop: %s\n", pkg);
+        }
+    }
+
+    cJSON_Delete(root);
+    printf("✅ Profile applied successfully!\n");
+}
+ 
+void apply_profile(const char *profile_name);
+char* get_userprofile_path();
+
+void apply_profile(const char *profile_name) {
+    char *user_profile = get_userprofile_path();
+    if (!user_profile) {
+        fprintf(stderr, "Error: Unable to get USERPROFILE.\n");
+        return;
+    }
+
+    char profile_path[MAX_PATH];
+    snprintf(profile_path, sizeof(profile_path), "%s%s%s%s",
+             user_profile, WINSTATE_DIR, profile_name, CONFIG_FILE);
+
+    FILE *fp = fopen(profile_path, "r");
+    if (!fp) {
+        fprintf(stderr, "Profile not found: %s\n", profile_path);
+        free(user_profile);
+        return;
+    }
+
+    printf("🪄 Applying Winwery profile: %s\n", profile_name);
+
+    // Read JSON (assuming you have parse_winstate_json())
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    rewind(fp);
+    char *json_data = malloc(size + 1);
+    fread(json_data, 1, size, fp);
+    json_data[size] = '\0';
+    fclose(fp);
+
+    // Call your existing function that applies JSON configs
+    // e.g., apply_winstate(json_data);
+    printf("✅ Loaded %ld bytes from %s\n", size, profile_path);
+
+    // Example: trigger registry, choco, scoop, etc. from parsed JSON
+    apply_winstate(json_data);
+
+    free(json_data);
+    free(user_profile);
+}
+
+char* get_userprofile_path() {
+    char *profile = getenv("USERPROFILE");
+    if (!profile) return NULL;
+    size_t len = strlen(profile);
+    char *path = malloc(len + 1);
+    strcpy(path, profile);
+    return path;
+}
+
+
+//
+
 
 // Declare globally
 char config_path[MAX_PATH];
@@ -663,7 +795,7 @@ void apply_system_config(cJSON* config) {
 }
 
 
-int apply_config() {
+int apply_config(int do_restart) {
     create_restore_point("WinState v" WINSTATE_VERSION " applied");
     FILE* f = fopen(config_path, "r");
     if (!f) {
@@ -715,7 +847,9 @@ int apply_config() {
     printf("Configuration from %s applied successfully.\n", config_path);
     printf("Applied");
 
-    //reboot_system();  // Optional: comment this if testing without reboot
+    if (do_restart) {
+        reboot_system();
+    }
 
     return 0;
 }
@@ -1017,8 +1151,21 @@ int main(int argc, char* argv[]) {
         argc--;
     }
 
+    if (strcmp(argv[1], "profile") == 0) {
+        apply_profile(argv[2]);
+    } else {
+        printf("Unknown command: %s\n", argv[1]);
+    }
+
+    return 0;
     if (strcmp(argv[1], "apply") == 0) {
-        return apply_config();
+        int do_restart = 0;
+
+        if (argc >= 3 && strcmp(argv[2], "-restart") == 0) {
+            do_restart = 1;
+        }
+
+        return apply_config(do_restart);
     } else if (strcmp(argv[1], "add") == 0) {
         return add_command(argc, argv);
     } else if (strcmp(argv[1], "describe") == 0) {
